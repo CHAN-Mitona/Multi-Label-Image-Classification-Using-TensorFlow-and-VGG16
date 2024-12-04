@@ -1,0 +1,187 @@
+from google.colab import drive
+drive.mount('/content/drive')
+
+import os
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.model_selection import train_test_split
+from sklearn.utils.class_weight import compute_class_weight
+from imblearn.over_sampling import RandomOverSampler
+from tensorflow.keras.preprocessing import image
+from tensorflow.keras.applications.vgg16 import preprocess_input, VGG16
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Flatten, Dense, Dropout, BatchNormalization
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+import tensorflow as tf
+
+# Define the paths for loading
+preprocessed_data_path = "/content/drive/MyDrive/Fashion_Data/preprocessed_images.npy"
+preprocessed_labels_path = "/content/drive/MyDrive/Fashion_Data/preprocessed_labels.npy"
+
+# Load the preprocessed data
+X = np.load(preprocessed_data_path)
+labels = np.load(preprocessed_labels_path, allow_pickle=True)  # Allow pickle for saving list-like data
+
+print(f"Loaded preprocessed images of shape: {X.shape}")
+print(f"Loaded preprocessed labels of length: {len(labels)}")
+
+
+
+# Label Encoding
+
+mlb = MultiLabelBinarizer()
+y_encoded = mlb.fit_transform([[label] for label in labels])
+print(f"Shape of y_encoded: {y_encoded.shape}")
+print(f"Classes: {mlb.classes_}")
+
+
+# Reload oversampled data
+X_resampled_list, y_resampled_list = [], []
+temp_dir = "/content/drive/MyDrive/oversampled_batches"
+
+print("Reloading oversampled data from Drive...")
+num_batches = 1  # Update as needed
+for i in range(num_batches):
+    X_resampled_list.append(np.load(os.path.join(temp_dir, f"X_resampled_batch_{i}.npy")))
+    y_resampled_list.append(np.load(os.path.join(temp_dir, f"y_resampled_batch_{i}.npy")))
+
+# Use static max_classes from MultiLabelBinarizer
+max_classes = len(mlb.classes_)
+
+# Align all batches to max_classes
+for i in range(len(y_resampled_list)):
+    current_classes = y_resampled_list[i].shape[1]
+    if current_classes < max_classes:
+        # Pad missing classes with zeros
+        padding = np.zeros((y_resampled_list[i].shape[0], max_classes - current_classes))
+        y_resampled_list[i] = np.hstack((y_resampled_list[i], padding))
+    elif current_classes > max_classes:
+        # Truncate extra classes if any
+        y_resampled_list[i] = y_resampled_list[i][:, :max_classes]
+
+# Combine data
+X_resampled = np.vstack(X_resampled_list)
+y_resampled = np.vstack(y_resampled_list)
+
+# Reshape image data
+X_resampled = X_resampled.reshape(-1, 128, 128, 3)
+
+# Final check
+print(f"Final shapes: X_resampled: {X_resampled.shape}, y_resampled: {y_resampled.shape}")
+
+
+from sklearn.model_selection import train_test_split
+
+# Split the data into training and validation sets (80% train, 20% validation)
+X_train, X_val, y_train, y_val = train_test_split(
+    X_resampled, y_resampled, test_size=0.2, random_state=42, stratify=y_resampled
+)
+
+# Split the validation data into validation and test sets (50% each)
+X_val, X_test, y_val, y_test = train_test_split(
+    X_val, y_val, test_size=0.5, random_state=42, stratify=y_val
+)
+
+print(f"Shapes of split datasets:")
+print(f"X_train: {X_train.shape}, y_train: {y_train.shape}")
+print(f"X_val: {X_val.shape}, y_val: {y_val.shape}")
+print(f"X_test: {X_test.shape}, y_test: {y_test.shape}")
+
+# Convert one-hot encoded labels to class indices
+y_resampled_classes = np.argmax(y_resampled, axis=1)
+
+# Compute class weights
+unique_classes = np.unique(y_resampled_classes)
+class_weights = compute_class_weight(
+    class_weight='balanced',
+    classes=unique_classes,  # Match the unique classes
+    y=y_resampled_classes
+)
+
+# Convert to dictionary with default weights for any missing classes
+all_classes = np.arange(len(mlb.classes_))
+class_weights_dict = {int(c): 1.0 for c in all_classes}  # Default weight
+class_weights_dict.update({int(c): w for c, w in zip(unique_classes, class_weights)})
+
+print("Computed class weights:", class_weights_dict)
+
+
+
+# Data Augmentation
+
+datagen = ImageDataGenerator(
+    rotation_range=30,
+    width_shift_range=0.1,
+    height_shift_range=0.1,
+    shear_range=0.2,
+    zoom_range=0.2,
+    horizontal_flip=True,
+    fill_mode='nearest'
+)
+datagen.fit(X_train)
+
+
+# Build and Compile the Model
+
+base_model = VGG16(weights='imagenet', include_top=False, input_shape=(128, 128, 3))
+base_model.trainable = False
+
+# Define the model
+model = Sequential([
+    base_model,
+    Flatten(),
+    Dense(256, activation='relu'),
+    BatchNormalization(),
+    Dropout(0.5),
+    Dense(len(mlb.classes_), activation='sigmoid')  # Sigmoid for multi-label classification
+])
+
+# Focal loss function
+def focal_loss(alpha=0.25, gamma=2.0):
+    def loss(y_true, y_pred):
+        pt = tf.where(tf.equal(y_true, 1), y_pred, 1 - y_pred)
+        return -tf.reduce_sum(alpha * tf.pow(1 - pt, gamma) * tf.math.log(pt))
+    return loss
+
+model.compile(optimizer='adam', loss=focal_loss(), metrics=['accuracy'])
+
+
+# Train the Model
+
+early_stopping = EarlyStopping(monitor='val_loss', patience=3, restore_best_weights=True)
+reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.5, patience=2)
+
+history = model.fit(
+    datagen.flow(X_train, y_train, batch_size=32),
+    validation_data=(X_val, y_val),
+    epochs=20,
+    class_weight=class_weights_dict,
+    callbacks=[early_stopping, reduce_lr]
+)
+
+
+
+# Step 7: Evaluate the Model
+
+
+# Evaluate the model
+loss, accuracy = model.evaluate(X_val, y_val)
+print(f"Validation Loss: {loss}")
+print(f"Validation Accuracy: {accuracy}")
+
+# Make predictions
+y_pred = model.predict(X_val)
+
+# Apply a threshold to binarize predictions
+threshold = 0.5
+binary_preds = (y_pred > threshold).astype(int)
+
+# Decode the predictions using MultiLabelBinarizer
+decoded_preds = mlb.inverse_transform(binary_preds)
+
+# Display sample predictions
+print("Sample Predictions:", decoded_preds[:5])
+
