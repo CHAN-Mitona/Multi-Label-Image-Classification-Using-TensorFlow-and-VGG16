@@ -23,7 +23,7 @@ preprocessed_labels_path = "/content/drive/MyDrive/Fashion_Data/preprocessed_lab
 
 # Load the preprocessed data
 X = np.load(preprocessed_data_path)
-labels = np.load(preprocessed_labels_path, allow_pickle=True)  # Allow pickle for saving list-like data
+labels = np.load(preprocessed_labels_path, allow_pickle=True)
 
 print(f"Loaded preprocessed images of shape: {X.shape}")
 print(f"Loaded preprocessed labels of length: {len(labels)}")
@@ -43,7 +43,7 @@ X_resampled_list, y_resampled_list = [], []
 temp_dir = "/content/drive/MyDrive/oversampled_batches"
 
 print("Reloading oversampled data from Drive...")
-num_batches = 1  # Update as needed
+num_batches = 1 
 for i in range(num_batches):
     X_resampled_list.append(np.load(os.path.join(temp_dir, f"X_resampled_batch_{i}.npy")))
     y_resampled_list.append(np.load(os.path.join(temp_dir, f"y_resampled_batch_{i}.npy")))
@@ -55,11 +55,10 @@ max_classes = len(mlb.classes_)
 for i in range(len(y_resampled_list)):
     current_classes = y_resampled_list[i].shape[1]
     if current_classes < max_classes:
-        # Pad missing classes with zeros
+        # fill missing classes with zeros
         padding = np.zeros((y_resampled_list[i].shape[0], max_classes - current_classes))
         y_resampled_list[i] = np.hstack((y_resampled_list[i], padding))
     elif current_classes > max_classes:
-        # Truncate extra classes if any
         y_resampled_list[i] = y_resampled_list[i][:, :max_classes]
 
 # Combine data
@@ -103,7 +102,7 @@ class_weights = compute_class_weight(
 
 # Convert to dictionary with default weights for any missing classes
 all_classes = np.arange(len(mlb.classes_))
-class_weights_dict = {int(c): 1.0 for c in all_classes}  # Default weight
+class_weights_dict = {int(c): 1.0 for c in all_classes} 
 class_weights_dict.update({int(c): w for c, w in zip(unique_classes, class_weights)})
 
 print("Computed class weights:", class_weights_dict)
