@@ -1,0 +1,1 @@
+I host it all on collab so the resources are already download within my drive. For convenient, I preprocessing the images i downloaded and store it in the drive. The dataset I use is "Fashion Dataset", https://www.kaggle.com/datasets/nitinsss/fashion-dataset-with-over-15000-labelled-images.
