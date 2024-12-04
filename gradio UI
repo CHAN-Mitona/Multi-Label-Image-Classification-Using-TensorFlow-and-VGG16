@@ -1,0 +1,50 @@
+import gradio as gr
+import numpy as np
+from PIL import Image
+from tensorflow.keras.models import load_model
+from sklearn.preprocessing import MultiLabelBinarizer
+import tensorflow as tf
+
+# Custom loss function and model loading
+def custom_loss(y_true, y_pred):
+    return tf.keras.losses.BinaryCrossentropy()(y_true, y_pred)
+
+model = load_model("/content/drive/MyDrive/Fashion_Data/csbmodel_opt.keras",
+                   custom_objects={'loss': custom_loss})
+
+categories = ['OTHER', 'animal', 'cartoon', 'chevron', 'floral', 'geometry', 'houndstooth',
+              'ikat', 'letter_numb', 'plain', 'polka dot', 'scales', 'skull', 'squares',
+              'stars', 'stripes', 'tribal']
+
+mlb = MultiLabelBinarizer()
+mlb.classes_ = np.array(categories)
+
+def predict_image(img):
+    
+    img = img.resize((128, 128)) 
+    img_array = np.array(img) / 255.0  
+    img_array = np.expand_dims(img_array, axis=0) 
+
+    print("Image shape:", img_array.shape)
+    print("Image values range:", img_array.min(), "-", img_array.max())
+
+    y_pred = model.predict(img_array)
+    print("Raw predictions:", y_pred)
+
+    y_pred_binary = (y_pred > 0.3).astype(int)
+    print("Binary predictions:", y_pred_binary)
+
+    decoded_pred = mlb.inverse_transform(y_pred_binary)
+    return ", ".join(decoded_pred[0]) if decoded_pred else "No categories detected"
+
+# Gradio Interface
+interface = gr.Interface(
+    fn=predict_image,
+    # Input type: PIL image
+    inputs=gr.Image(type="pil"),  
+    outputs="text",
+    title="Multi-label Image Classification",
+    description="Upload an image to classify it into multiple categories."
+)
+
+interface.launch(share=True)
